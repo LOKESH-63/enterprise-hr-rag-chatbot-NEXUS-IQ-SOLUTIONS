@@ -2,8 +2,6 @@ import streamlit as st
 import faiss
 import numpy as np
 import os
-import pandas as pd
-from datetime import datetime
 
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
@@ -11,9 +9,9 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # ---------------- PAGE CONFIG ----------------
-st.set_page_config(page_title="Enterprise HR Assistant", page_icon="🏢")
+st.set_page_config(page_title="HR Policy Chatbot", page_icon="🏢")
 
-DATA_DIR = "data"
+PDF_FILE = "Sample_HR_Policy_Document.pdf"
 
 # ---------------- LOGIN SYSTEM ----------------
 USERS = {
@@ -49,7 +47,7 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ---------------- HEADER ----------------
-st.title("🏢 Enterprise RAG-based HR Chatbot")
+st.title("🏢 Enterprise HR Policy Chatbot")
 st.caption(f"Logged in as: **{st.session_state.role}**")
 
 if st.button("Logout"):
@@ -57,88 +55,67 @@ if st.button("Logout"):
     st.rerun()
 
 # ---------------- CHECK PDF ----------------
-if not os.path.exists(DATA_DIR):
-    st.error("❌ data folder not found")
-    st.stop()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PDF_PATH = os.path.join(BASE_DIR, PDF_FILE)
 
-pdf_files = [f for f in os.listdir(DATA_DIR) if f.endswith(".pdf")]
-
-if not pdf_files:
-    st.error("❌ No HR policy PDF found in data folder")
+if not os.path.exists(PDF_PATH):
+    st.error(f"❌ {PDF_FILE} not found in repository root.")
     st.stop()
 
 # ---------------- LOAD RAG PIPELINE ----------------
 @st.cache_resource
-def load_pipeline(pdf_files):
-    texts, sources = [], []
+def load_pipeline():
+    loader = PyPDFLoader(PDF_PATH)
+    documents = loader.load()
 
-    for file in pdf_files:
-        loader = PyPDFLoader(os.path.join(DATA_DIR, file))
-        docs = loader.load()
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=100
+    )
+    chunks = splitter.split_documents(documents)
 
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=900,
-            chunk_overlap=150
-        )
-        chunks = splitter.split_documents(docs)
-
-        for c in chunks:
-            texts.append(c.page_content)
-            sources.append(f"{file} - page {c.metadata.get('page', 0)}")
+    texts = [c.page_content for c in chunks]
 
     embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
-    embeddings = embedder.encode(texts, normalize_embeddings=True)
+    embeddings = embedder.encode(texts)
 
-    index = faiss.IndexFlatIP(embeddings.shape[1])
+    index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(np.array(embeddings))
 
     tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
     model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
     llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
 
-    return embedder, index, texts, sources, llm
+    return embedder, index, texts, llm
 
-embedder, index, texts, sources, llm = load_pipeline(pdf_files)
+embedder, index, texts, llm = load_pipeline()
 
-# ---------------- RAG QUERY ----------------
-def answer_query(query):
-    q_emb = embedder.encode([query], normalize_embeddings=True)
-    scores, idx = index.search(np.array(q_emb), k=5)
+# ---------------- QUERY FUNCTION ----------------
+def answer_query(question):
+    q_emb = embedder.encode([question])
+    _, idx = index.search(np.array(q_emb), k=3)
 
-    filtered = [
-        (texts[i], sources[i])
-        for i, s in zip(idx[0], scores[0])
-        if s > 0.35
-    ]
-
-    if not filtered:
-        return "This information is not mentioned in the HR policy.", None
-
-    context = "\n".join([t for t, _ in filtered])
+    context = " ".join([texts[i] for i in idx[0]])
 
     prompt = f"""
-Answer ONLY from HR policy document.
-If not found, say it is not mentioned.
+Answer ONLY from the HR policy document.
+If the answer is not present, say politely:
+"I checked the HR policy document, but this information is not mentioned."
 
-HR Content:
+Context:
 {context}
 
 Question:
-{query}
+{question}
 """
 
-    answer = llm(prompt, max_length=200, temperature=0.2)[0]["generated_text"]
-    return answer, [s for _, s in filtered]
+    return llm(prompt, max_length=200, temperature=0.2)[0]["generated_text"]
 
 # ---------------- CHAT UI ----------------
 st.subheader("💬 Ask HR Policy Question")
-query = st.text_input("Enter your question")
+question = st.text_input("Enter your question")
 
-if query:
-    answer, src = answer_query(query)
+if question:
+    answer = answer_query(question)
     st.success(answer)
 
-    with st.expander("📄 Source"):
-        if src:
-            for s in src:
-                st.write(s)
