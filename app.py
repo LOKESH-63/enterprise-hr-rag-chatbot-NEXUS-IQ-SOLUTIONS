@@ -2,6 +2,7 @@ import streamlit as st
 import faiss
 import numpy as np
 import os
+from PIL import Image
 
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
@@ -11,7 +12,13 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="HR Policy Chatbot", page_icon="🏢")
 
+# ---------------- CONSTANTS ----------------
 PDF_FILE = "Sample_HR_Policy_Document.pdf"
+LOGO_FILE = "nexus_iq_logo.png"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PDF_PATH = os.path.join(BASE_DIR, PDF_FILE)
+LOGO_PATH = os.path.join(BASE_DIR, LOGO_FILE)
 
 # ---------------- LOGIN SYSTEM ----------------
 USERS = {
@@ -46,8 +53,17 @@ if not st.session_state.logged_in:
     login()
     st.stop()
 
-# ---------------- HEADER ----------------
-st.title("🏢 NEXUS IQ SOLUTIONS")
+# ---------------- HEADER WITH LOGO ----------------
+if os.path.exists(LOGO_PATH):
+    logo = Image.open(LOGO_PATH)
+    col1, col2 = st.columns([1, 6])
+    with col1:
+        st.image(logo, width=70)
+    with col2:
+        st.markdown("## **Enterprise RAG-based HR Chatbot**")
+else:
+    st.markdown("## **Enterprise RAG-based HR Chatbot**")
+
 st.caption(f"Logged in as: **{st.session_state.role}**")
 
 if st.button("Logout"):
@@ -55,11 +71,8 @@ if st.button("Logout"):
     st.rerun()
 
 # ---------------- CHECK PDF ----------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PDF_PATH = os.path.join(BASE_DIR, PDF_FILE)
-
 if not os.path.exists(PDF_PATH):
-    st.error(f"❌ {PDF_FILE} not found in repository root.")
+    st.error("❌ HR Policy PDF not found in repository root.")
     st.stop()
 
 # ---------------- LOAD RAG PIPELINE ----------------
@@ -73,7 +86,6 @@ def load_pipeline():
         chunk_overlap=100
     )
     chunks = splitter.split_documents(documents)
-
     texts = [c.page_content for c in chunks]
 
     embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
@@ -90,28 +102,49 @@ def load_pipeline():
 
 embedder, index, texts, llm = load_pipeline()
 
-# ---------------- QUERY FUNCTION ----------------
+# ---------------- GREETING HANDLER ----------------
+def is_greeting(text):
+    greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
+    return text.lower().strip() in greetings
+
+# ---------------- RAG QUERY FUNCTION ----------------
 def answer_query(question):
     q_emb = embedder.encode([question])
     _, idx = index.search(np.array(q_emb), k=3)
 
-    context = " ".join([texts[i] for i in idx[0]])
+    # Use only top 2 chunks to avoid policy dumping
+    context = " ".join([texts[i] for i in idx[0][:2]])
 
     prompt = f"""
-Answer ONLY from the HR policy document.
-If the answer is not present, say politely:
+You are an HR assistant.
+
+Answer the question in clear, simple, professional language.
+Do NOT copy policy clauses.
+Summarize the answer in 2–4 sentences.
+Use ONLY the information from the HR policy.
+
+If the answer is not available, say:
 "I checked the HR policy document, but this information is not mentioned."
 
-Context:
+Policy Content:
 {context}
 
 Question:
 {question}
 """
 
-    return llm(prompt, max_length=200, temperature=0.2)[0]["generated_text"]
+    response = llm(
+        prompt,
+        max_length=120,
+        temperature=0.1
+    )[0]["generated_text"]
+
+    return response
 
 # ---------------- CHAT UI ----------------
+st.subheader("💬 Ask HR Policy Question")
+question = st.text_input("Enter your question")
+
 if question:
     if is_greeting(question):
         st.info(
@@ -124,5 +157,4 @@ if question:
     else:
         answer = answer_query(question)
         st.success(answer)
-
 
