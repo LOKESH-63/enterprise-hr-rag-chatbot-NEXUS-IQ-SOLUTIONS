@@ -1,0 +1,9 @@
+streamlit
+faiss-cpu
+sentence-transformers
+transformers
+torch
+langchain-community
+langchain-text-splitters
+pypdf
+pandas
