@@ -13,17 +13,6 @@ st.set_page_config(page_title="HR Policy Chatbot", page_icon="🏢")
 
 PDF_FILE = "Sample_HR_Policy_Document.pdf"
 
-from PIL import Image
-
-# -------- COMPANY LOGO --------
-logo = Image.open("nexus_iq_logo.png")
-
-col1, col2 = st.columns([1, 6])
-with col1:
-    st.image(logo, width=70)   # small logo
-with col2:
-    st.markdown("## **Enterprise RAG-based HR Chatbot**")
-
 # ---------------- LOGIN SYSTEM ----------------
 USERS = {
     "employee": {"password": "employee123", "role": "Employee"},
