@@ -112,11 +112,17 @@ Question:
     return llm(prompt, max_length=200, temperature=0.2)[0]["generated_text"]
 
 # ---------------- CHAT UI ----------------
-st.subheader("💬 Ask HR Policy Question")
-question = st.text_input("Enter your question")
-
 if question:
-    answer = answer_query(question)
-    st.success(answer)
+    if is_greeting(question):
+        st.info(
+            "Hello 👋 I’m your HR Policy Assistant.\n\n"
+            "You can ask me questions like:\n"
+            "- What is the leave policy?\n"
+            "- What is the notice period?\n"
+            "- How many casual leaves are allowed?"
+        )
+    else:
+        answer = answer_query(question)
+        st.success(answer)
 
 
