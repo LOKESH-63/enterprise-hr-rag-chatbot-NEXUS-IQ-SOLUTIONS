@@ -47,7 +47,7 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ---------------- HEADER ----------------
-st.title("🏢 Enterprise HR Policy Chatbot")
+st.title("🏢 NEXUS IQ SOLUTIONS HR Policy Chatbot")
 st.caption(f"Logged in as: **{st.session_state.role}**")
 
 if st.button("Logout"):
