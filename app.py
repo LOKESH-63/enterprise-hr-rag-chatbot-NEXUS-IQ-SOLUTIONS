@@ -108,8 +108,6 @@ Context:
 Question:
 {question}
 """
-
-
     return llm(prompt, max_length=200, temperature=0.2)[0]["generated_text"]
 
 # ---------------- CHAT UI ----------------
