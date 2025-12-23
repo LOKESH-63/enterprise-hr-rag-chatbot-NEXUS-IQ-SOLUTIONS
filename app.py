@@ -47,7 +47,7 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ---------------- HEADER ----------------
-st.title(" NEXUS IQ SOLUTIONS ")
+st.title("🏢 NEXUS IQ SOLUTIONS")
 st.caption(f"Logged in as: **{st.session_state.role}**")
 
 if st.button("Logout"):
@@ -95,34 +95,21 @@ def answer_query(question):
     q_emb = embedder.encode([question])
     _, idx = index.search(np.array(q_emb), k=3)
 
-    # Use only top 2 chunks
-    context = " ".join([texts[i] for i in idx[0][:2]])
+    context = " ".join([texts[i] for i in idx[0]])
 
     prompt = f"""
-You are an HR assistant.
-
-Answer the question in clear, simple, professional language.
-Do NOT copy policy clauses.
-Summarize the answer in 2–4 sentences.
-Use ONLY the information from the policy.
-
-If the answer is not available, say:
+Answer ONLY from the HR policy document.
+If the answer is not present, say politely:
 "I checked the HR policy document, but this information is not mentioned."
 
-Policy Content:
+Context:
 {context}
 
 Question:
 {question}
 """
 
-    response = llm(
-        prompt,
-        max_length=120,
-        temperature=0.1
-    )[0]["generated_text"]
-
-    return response
+    return llm(prompt, max_length=200, temperature=0.2)[0]["generated_text"]
 
 # ---------------- CHAT UI ----------------
 st.subheader("💬 Ask HR Policy Question")
@@ -131,4 +118,5 @@ question = st.text_input("Enter your question")
 if question:
     answer = answer_query(question)
     st.success(answer)
+
 
