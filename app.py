@@ -60,9 +60,9 @@ if os.path.exists(LOGO_PATH):
     with col1:
         st.image(logo, width=70)
     with col2:
-        st.markdown("## **Enterprise RAG-based HR Chatbot**")
+        st.markdown("## **NEXUS IQ SOLUTIONS**")
 else:
-    st.markdown("## **Enterprise RAG-based HR Chatbot**")
+    st.markdown("## **NEXUS IQ SOLUTIONS**")
 
 st.caption(f"Logged in as: **{st.session_state.role}**")
 
