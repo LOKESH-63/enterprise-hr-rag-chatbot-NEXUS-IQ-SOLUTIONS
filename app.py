@@ -97,17 +97,24 @@ def answer_query(question):
 
     context = " ".join([texts[i] for i in idx[0]])
 
-    prompt = f"""
-Answer ONLY from the HR policy document.
-If the answer is not present, say politely:
+   prompt = f"""
+You are an HR assistant.
+
+Answer the question in clear, simple, professional language.
+Do NOT copy policy clauses.
+Summarize the answer in 2–4 sentences.
+Use ONLY the information from the policy.
+
+If the answer is not available, say:
 "I checked the HR policy document, but this information is not mentioned."
 
-Context:
+Policy Content:
 {context}
 
 Question:
 {question}
 """
+
 
     return llm(prompt, max_length=200, temperature=0.2)[0]["generated_text"]
 
