@@ -2,6 +2,7 @@ import streamlit as st
 import faiss
 import numpy as np
 import os
+import re
 from PIL import Image
 
 from sentence_transformers import SentenceTransformer
@@ -71,6 +72,16 @@ if not os.path.exists(PDF_PATH):
     st.error("❌ HR Policy PDF not found.")
     st.stop()
 
+# ---------------- CLEAN POLICY TEXT (REMOVE NUMBERS) ----------------
+def clean_policy_text(text):
+    # Remove clause numbers like 2.1, 10.3.4
+    text = re.sub(r"\b\d+(\.\d+)+\b", "", text)
+
+    # Remove standalone numbers at beginning of lines
+    text = re.sub(r"^\s*\d+\s*", "", text, flags=re.MULTILINE)
+
+    return text.strip()
+
 # ---------------- LOAD RAG PIPELINE ----------------
 @st.cache_resource
 def load_pipeline():
@@ -104,13 +115,16 @@ def is_greeting(text):
     text = text.lower()
     return any(greet in text for greet in greetings)
 
-# ---------------- ANSWER FUNCTION (SUMMARY ONLY) ----------------
+# ---------------- ANSWER FUNCTION (SUMMARY ONLY, NO NUMBERS) ----------------
 def answer_query(question):
     q_emb = embedder.encode([question])
     _, idx = index.search(np.array(q_emb).astype("float32"), k=3)
 
-    # Use ONLY top 1 chunk to avoid dumping
-    context = texts[idx[0][0]]
+    # Use ONLY top chunk
+    raw_context = texts[idx[0][0]]
+
+    # 🔑 Clean numbering from policy text
+    context = clean_policy_text(raw_context)
 
     prompt = f"""
 You are a professional HR assistant.
@@ -118,12 +132,11 @@ You are a professional HR assistant.
 TASK:
 - Answer using ONLY the policy content below
 - Provide a SHORT and NATURAL SUMMARY
-- Limit to 2–3 sentences
-- Do NOT copy policy text
-- Do NOT repeat information
-- Do NOT mention clauses or page numbers
+- Limit the answer to 2–3 sentences
+- Do NOT include numbers, clauses, or section references
+- Do NOT copy policy wording
 
-If information is not available, reply exactly:
+If the information is not available, reply exactly:
 "I checked the HR policy document, but this information is not mentioned."
 
 Policy Content:
@@ -132,7 +145,7 @@ Policy Content:
 Question:
 {question}
 
-Final Answer (summary only):
+Final Answer (summary only, no numbering):
 """
 
     response = llm(
