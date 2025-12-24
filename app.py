@@ -4,11 +4,13 @@ import numpy as np
 import os
 import re
 from PIL import Image
+from openai import OpenAI
 
-from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# ---------------- OPENAI CLIENT ----------------
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="HR Policy Chatbot", page_icon="🏢")
@@ -30,10 +32,9 @@ USERS = {
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
-# ---------------- LOGIN FUNCTION ----------------
+# ---------------- LOGIN ----------------
 def login():
     st.title("🔐 Login – HR Policy Assistant")
-
     with st.form("login_form"):
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
@@ -72,15 +73,19 @@ if not os.path.exists(PDF_PATH):
     st.error("❌ HR Policy PDF not found.")
     st.stop()
 
-# ---------------- CLEAN POLICY TEXT (REMOVE NUMBERS) ----------------
+# ---------------- CLEAN POLICY TEXT ----------------
 def clean_policy_text(text):
-    # Remove clause numbers like 2.1, 10.3.4
     text = re.sub(r"\b\d+(\.\d+)+\b", "", text)
-
-    # Remove standalone numbers at beginning of lines
     text = re.sub(r"^\s*\d+\s*", "", text, flags=re.MULTILINE)
-
     return text.strip()
+
+# ---------------- OPENAI EMBEDDING ----------------
+def get_embedding(text):
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+    return np.array(response.data[0].embedding, dtype="float32")
 
 # ---------------- LOAD RAG PIPELINE ----------------
 @st.cache_resource
@@ -88,55 +93,41 @@ def load_pipeline():
     loader = PyPDFLoader(PDF_PATH)
     documents = loader.load()
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=100
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
     chunks = splitter.split_documents(documents)
     texts = [c.page_content for c in chunks]
 
-    embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
-    embeddings = embedder.encode(texts)
+    embeddings = np.vstack([get_embedding(t) for t in texts])
 
     index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings).astype("float32"))
+    index.add(embeddings)
 
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
-    llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
+    return index, texts
 
-    return embedder, index, texts, llm
+index, texts = load_pipeline()
 
-embedder, index, texts, llm = load_pipeline()
-
-# ---------------- GREETING CHECK ----------------
+# ---------------- GREETING ----------------
 def is_greeting(text):
-    greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
-    text = text.lower()
-    return any(greet in text for greet in greetings)
+    return any(g in text.lower() for g in ["hi", "hello", "hey", "good morning"])
 
-# ---------------- ANSWER FUNCTION (SUMMARY ONLY, NO NUMBERS) ----------------
+# ---------------- ANSWER FUNCTION ----------------
 def answer_query(question):
-    q_emb = embedder.encode([question])
-    _, idx = index.search(np.array(q_emb).astype("float32"), k=3)
+    q_emb = get_embedding(question)
+    _, idx = index.search(np.array([q_emb]), k=3)
 
-    # Use ONLY top chunk
     raw_context = texts[idx[0][0]]
-
-    # 🔑 Clean numbering from policy text
     context = clean_policy_text(raw_context)
 
     prompt = f"""
 You are a professional HR assistant.
 
-TASK:
-- Answer using ONLY the policy content below
-- Provide a SHORT and NATURAL SUMMARY
-- Limit the answer to 2–3 sentences
-- Do NOT include numbers, clauses, or section references
-- Do NOT copy policy wording
+Rules:
+- Answer ONLY from the policy content
+- Provide a SHORT summary (2–3 sentences)
+- Do NOT include numbers, clauses, or sections
+- Do NOT assume information
 
-If the information is not available, reply exactly:
+If the answer is missing, reply exactly:
 "I checked the HR policy document, but this information is not mentioned."
 
 Policy Content:
@@ -145,17 +136,17 @@ Policy Content:
 Question:
 {question}
 
-Final Answer (summary only, no numbering):
+Final Answer:
 """
 
-    response = llm(
-        prompt,
-        max_new_tokens=80,
+    completion = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
-        do_sample=False
-    )[0]["generated_text"]
+        max_tokens=120
+    )
 
-    return response.strip()
+    return completion.choices[0].message.content.strip()
 
 # ---------------- UI ----------------
 st.subheader("💬 Ask HR Policy Question")
@@ -163,13 +154,6 @@ question = st.text_input("Enter your question")
 
 if question:
     if is_greeting(question):
-        st.info(
-            "Hello 👋 I’m your HR Policy Assistant.\n\n"
-            "You can ask questions like:\n"
-            "- What is the leave policy?\n"
-            "- What is the notice period?\n"
-            "- How many casual leaves are allowed?"
-        )
+        st.info("Hello 👋 I’m your HR Policy Assistant.")
     else:
         st.success(answer_query(question))
-
