@@ -12,7 +12,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="HR Policy Chatbot", page_icon="🏢")
 
-# ---------------- CONSTANTS ----------------
+# ---------------- FILE PATHS ----------------
 PDF_FILE = "Sample_HR_Policy_Document.pdf"
 LOGO_FILE = "nexus_iq_logo.png"
 
@@ -20,7 +20,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PDF_PATH = os.path.join(BASE_DIR, PDF_FILE)
 LOGO_PATH = os.path.join(BASE_DIR, LOGO_FILE)
 
-# ---------------- LOGIN SYSTEM ----------------
+# ---------------- LOGIN USERS ----------------
 USERS = {
     "employee": {"password": "employee123", "role": "Employee"},
     "hr": {"password": "hr123", "role": "HR"}
@@ -29,6 +29,7 @@ USERS = {
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+# ---------------- LOGIN FUNCTION ----------------
 def login():
     st.title("🔐 Login – HR Policy Assistant")
 
@@ -38,12 +39,8 @@ def login():
         submit = st.form_submit_button("Login")
 
     if submit:
-        username = username.strip()
-        password = password.strip()
-
         if username in USERS and USERS[username]["password"] == password:
             st.session_state.logged_in = True
-            st.session_state.username = username
             st.session_state.role = USERS[username]["role"]
             st.rerun()
         else:
@@ -53,12 +50,11 @@ if not st.session_state.logged_in:
     login()
     st.stop()
 
-# ---------------- HEADER WITH LOGO ----------------
+# ---------------- HEADER ----------------
 if os.path.exists(LOGO_PATH):
-    logo = Image.open(LOGO_PATH)
     col1, col2 = st.columns([1, 6])
     with col1:
-        st.image(logo, width=70)
+        st.image(Image.open(LOGO_PATH), width=70)
     with col2:
         st.markdown("## **NEXUS IQ SOLUTIONS**")
 else:
@@ -70,9 +66,9 @@ if st.button("Logout"):
     st.session_state.logged_in = False
     st.rerun()
 
-# ---------------- CHECK PDF ----------------
+# ---------------- PDF CHECK ----------------
 if not os.path.exists(PDF_PATH):
-    st.error("❌ HR Policy PDF not found in repository root.")
+    st.error("❌ HR Policy PDF not found.")
     st.stop()
 
 # ---------------- LOAD RAG PIPELINE ----------------
@@ -92,7 +88,7 @@ def load_pipeline():
     embeddings = embedder.encode(texts)
 
     index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings))
+    index.add(np.array(embeddings).astype("float32"))
 
     tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
     model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
@@ -102,28 +98,32 @@ def load_pipeline():
 
 embedder, index, texts, llm = load_pipeline()
 
-# ---------------- GREETING HANDLER ----------------
+# ---------------- GREETING CHECK ----------------
 def is_greeting(text):
     greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
-    return text.lower().strip() in greetings
+    text = text.lower()
+    return any(greet in text for greet in greetings)
 
-# ---------------- RAG QUERY FUNCTION ----------------
+# ---------------- ANSWER FUNCTION (SUMMARY ONLY) ----------------
 def answer_query(question):
     q_emb = embedder.encode([question])
-    _, idx = index.search(np.array(q_emb), k=3)
+    _, idx = index.search(np.array(q_emb).astype("float32"), k=3)
 
-    # Use only top 2 chunks to avoid policy dumping
-    context = " ".join([texts[i] for i in idx[0][:2]])
+    # Use ONLY top 1 chunk to avoid dumping
+    context = texts[idx[0][0]]
 
     prompt = f"""
-You are an HR assistant.
+You are a professional HR assistant.
 
-Answer the question in clear, simple, professional language.
-Do NOT copy policy clauses.
-Summarize the answer in 2–4 sentences.
-Use ONLY the information from the HR policy.
+TASK:
+- Answer using ONLY the policy content below
+- Provide a SHORT and NATURAL SUMMARY
+- Limit to 2–3 sentences
+- Do NOT copy policy text
+- Do NOT repeat information
+- Do NOT mention clauses or page numbers
 
-If the answer is not available, say:
+If information is not available, reply exactly:
 "I checked the HR policy document, but this information is not mentioned."
 
 Policy Content:
@@ -131,17 +131,20 @@ Policy Content:
 
 Question:
 {question}
+
+Final Answer (summary only):
 """
 
     response = llm(
         prompt,
-        max_length=120,
-        temperature=0.5
+        max_new_tokens=80,
+        temperature=0.2,
+        do_sample=False
     )[0]["generated_text"]
 
-    return response
+    return response.strip()
 
-# ---------------- CHAT UI ----------------
+# ---------------- UI ----------------
 st.subheader("💬 Ask HR Policy Question")
 question = st.text_input("Enter your question")
 
@@ -149,12 +152,11 @@ if question:
     if is_greeting(question):
         st.info(
             "Hello 👋 I’m your HR Policy Assistant.\n\n"
-            "You can ask me questions like:\n"
+            "You can ask questions like:\n"
             "- What is the leave policy?\n"
             "- What is the notice period?\n"
             "- How many casual leaves are allowed?"
         )
     else:
-        answer = answer_query(question)
-        st.success(answer)
+        st.success(answer_query(question))
 
