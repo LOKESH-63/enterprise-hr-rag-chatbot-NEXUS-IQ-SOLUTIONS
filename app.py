@@ -136,7 +136,7 @@ Question:
     response = llm(
         prompt,
         max_length=120,
-        temperature=0.1
+        temperature=0.5
     )[0]["generated_text"]
 
     return response
