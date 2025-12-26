@@ -12,8 +12,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # ======================================================
 # PAGE CONFIG
 # ======================================================
-st.set_page_config(page_title="HR Policy Assistant", page_icon="🏢")
-st.title("🏢 NEXUS IQ SOLUTIONS")
+st.set_page_config(page_title="NEXUS IQ HR Chatbot", page_icon="🏢")
+st.markdown("## 🏢 NEXUS IQ SOLUTIONS")
 st.caption("RAG-based • Clean & factual answers • Free models")
 
 # ======================================================
@@ -26,23 +26,23 @@ if not os.path.exists(PDF_FILE):
     st.stop()
 
 # ======================================================
-# STRONG CLEANING FUNCTION (NUMBERS + ROMAN NUMERALS)
+# STRONG CLEANING FUNCTION
 # ======================================================
 def clean_policy_text(text: str) -> str:
     # Remove numeric clauses (2.2, 3.4.1)
     text = re.sub(r"\b\d+(\.\d+)+\b", "", text)
 
-    # Remove roman numerals (i., ii., iii., iv.)
+    # Remove roman numerals (i., ii., iii.)
     text = re.sub(
-        r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\.\b",
+        r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\b\.?",
         "",
         text,
         flags=re.IGNORECASE
     )
 
-    # Remove list markers like a), 1)
+    # Remove bullets and list markers
+    text = re.sub(r"[•–—-]", " ", text)
     text = re.sub(r"\b[a-zA-Z]\)", "", text)
-    text = re.sub(r"\b\d+\)", "", text)
 
     # Normalize whitespace
     text = re.sub(r"\s+", " ", text)
@@ -50,17 +50,18 @@ def clean_policy_text(text: str) -> str:
     return text.strip()
 
 # ======================================================
-# DETECT FACTUAL QUESTIONS (KEY FEATURE)
+# EXTRACT RELEVANT SENTENCES (KEY FIX)
 # ======================================================
-def is_factual_question(question: str) -> bool:
-    keywords = [
-        "how many", "number of", "entitled", "per year",
-        "paid leave", "paid leaves",
-        "casual leave", "sick leave",
-        "days", "leave count"
+def extract_relevant_sentences(context: str, question: str) -> str:
+    sentences = re.split(r"(?<=[.!?])\s+", context)
+    q_words = [w for w in question.lower().split() if len(w) > 3]
+
+    relevant = [
+        s for s in sentences
+        if any(w in s.lower() for w in q_words)
     ]
-    q = question.lower()
-    return any(k in q for k in keywords)
+
+    return " ".join(relevant[:3])
 
 # ======================================================
 # LOAD RAG PIPELINE
@@ -96,80 +97,52 @@ def load_rag():
 embedder, index, texts, llm = load_rag()
 
 # ======================================================
-# ANSWER FUNCTION (SUMMARY + FACTUAL MODES)
+# ANSWER FUNCTION (FINAL – EXTRACT → REWRITE)
 # ======================================================
 def answer_question(question: str) -> str:
     q_emb = embedder.encode([question])
     _, idx = index.search(np.array(q_emb).astype("float32"), k=3)
 
-    # Use only top chunk
     raw_context = texts[idx[0][0]]
-    context = clean_policy_text(raw_context)
+    cleaned_context = clean_policy_text(raw_context)
 
-    factual = is_factual_question(question)
+    extracted = extract_relevant_sentences(
+        cleaned_context, question
+    )
 
-    if factual:
-        prompt = f"""
-You are an HR policy assistant.
+    if not extracted.strip():
+        return "I checked the HR policy document, but this information is not mentioned."
 
-TASK:
-- Answer using EXACT facts from the policy
-- Include numbers if they are mentioned
-- Be clear and direct
-- Do NOT include clause numbers or headings
+    prompt = f"""
+You are an HR assistant.
 
-If the information is not available, reply exactly:
-"I checked the HR policy document, but this information is not mentioned."
+Rewrite the information below into a clean, natural answer.
 
-Policy Content:
-{context}
+RULES:
+- Do NOT mention headings or section titles
+- Do NOT use bullet points
+- Do NOT include numbering or roman numerals
+- Write 2–3 professional sentences
+- Use simple, employee-friendly language
 
-Question:
-{question}
+Information:
+{extracted}
 
-Direct Answer:
-"""
-    else:
-        prompt = f"""
-You are an HR policy assistant.
-
-TASK:
-- SUMMARIZE the policy information
-- Use natural, professional language
-- Limit to 2–3 short sentences
-- Do NOT include numbers unless necessary
-- Do NOT include clause numbers or headings
-
-If the information is not available, reply exactly:
-"I checked the HR policy document, but this information is not mentioned."
-
-Policy Content:
-{context}
-
-Question:
-{question}
-
-Summary Answer:
+Final Answer:
 """
 
     result = llm(
         prompt,
-        max_new_tokens=100,
-        temperature=0.0,   # deterministic output
+        max_new_tokens=80,
+        temperature=0.0,
         do_sample=False
     )[0]["generated_text"]
 
-    # FINAL SAFETY CLEAN
-    answer = re.sub(r"\b\d+(\.\d+)+\b", "", result)
-    answer = re.sub(
-        r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\.\b",
-        "",
-        answer,
-        flags=re.IGNORECASE
-    )
-    answer = re.sub(r"\s+", " ", answer)
+    # FINAL HARD CLEAN
+    result = re.sub(r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\b", "", result, flags=re.I)
+    result = re.sub(r"\s+", " ", result)
 
-    return answer.strip()
+    return result.strip()
 
 # ======================================================
 # UI
@@ -184,4 +157,3 @@ if question:
     else:
         answer = answer_question(question)
         st.success(answer)
-
