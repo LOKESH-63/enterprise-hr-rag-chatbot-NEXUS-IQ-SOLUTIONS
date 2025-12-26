@@ -2,7 +2,7 @@ import streamlit as st
 import faiss
 import numpy as np
 import os
-import re
+from PIL import Image
 
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
@@ -12,30 +12,71 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="HR Policy Chatbot", page_icon="🏢")
 
-st.title("🏢 HR Policy Assistant (Free Version)")
-st.caption("Powered by open-source models • No API key required")
-
-# ---------------- PDF PATH ----------------
+# ---------------- FILE PATHS ----------------
 PDF_FILE = "Sample_HR_Policy_Document.pdf"
+LOGO_FILE = "nexus_iq_logo.png"
 
-if not os.path.exists(PDF_FILE):
-    st.error("HR Policy PDF not found. Please add Sample_HR_Policy_Document.pdf")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PDF_PATH = os.path.join(BASE_DIR, PDF_FILE)
+LOGO_PATH = os.path.join(BASE_DIR, LOGO_FILE)
+
+# ---------------- LOGIN USERS ----------------
+USERS = {
+    "employee": {"password": "employee123", "role": "Employee"},
+    "hr": {"password": "hr123", "role": "HR"}
+}
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+# ---------------- LOGIN FUNCTION ----------------
+def login():
+    st.title("🔐 Login – HR Policy Assistant")
+
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login")
+
+    if submit:
+        if username in USERS and USERS[username]["password"] == password:
+            st.session_state.logged_in = True
+            st.session_state.role = USERS[username]["role"]
+            st.rerun()
+        else:
+            st.error("Invalid credentials")
+
+if not st.session_state.logged_in:
+    login()
     st.stop()
 
-# ---------------- CLEAN POLICY TEXT ----------------
-def clean_policy_text(text):
-    text = re.sub(r"\b\d+(\.\d+)+\b", "", text)          # remove 2.1, 3.4 etc.
-    text = re.sub(r"^\s*\d+\s*", "", text, flags=re.M)  # remove line numbers
-    return text.strip()
+# ---------------- HEADER ----------------
+if os.path.exists(LOGO_PATH):
+    col1, col2 = st.columns([1, 6])
+    with col1:
+        st.image(Image.open(LOGO_PATH), width=70)
+    with col2:
+        st.markdown("## **NEXUS IQ SOLUTIONS**")
+else:
+    st.markdown("## **NEXUS IQ SOLUTIONS**")
+
+st.caption(f"Logged in as: **{st.session_state.role}**")
+
+if st.button("Logout"):
+    st.session_state.logged_in = False
+    st.rerun()
+
+# ---------------- PDF CHECK ----------------
+if not os.path.exists(PDF_PATH):
+    st.error("❌ HR Policy PDF not found.")
+    st.stop()
 
 # ---------------- LOAD RAG PIPELINE ----------------
 @st.cache_resource
-def load_rag():
-    # Load PDF
-    loader = PyPDFLoader(PDF_FILE)
+def load_pipeline():
+    loader = PyPDFLoader(PDF_PATH)
     documents = loader.load()
 
-    # Split text
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=100
@@ -43,46 +84,46 @@ def load_rag():
     chunks = splitter.split_documents(documents)
     texts = [c.page_content for c in chunks]
 
-    # Embeddings (FREE)
     embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
     embeddings = embedder.encode(texts)
 
-    # FAISS index
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(np.array(embeddings).astype("float32"))
 
-    # LLM (FREE)
     tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
     model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
-    llm = pipeline(
-        "text2text-generation",
-        model=model,
-        tokenizer=tokenizer
-    )
+    llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
 
     return embedder, index, texts, llm
 
-embedder, index, texts, llm = load_rag()
+embedder, index, texts, llm = load_pipeline()
 
-# ---------------- ANSWER FUNCTION ----------------
-def answer_question(question):
+# ---------------- GREETING CHECK ----------------
+def is_greeting(text):
+    greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
+    text = text.lower()
+    return any(greet in text for greet in greetings)
+
+# ---------------- ANSWER FUNCTION (SUMMARY ONLY) ----------------
+def answer_query(question):
     q_emb = embedder.encode([question])
     _, idx = index.search(np.array(q_emb).astype("float32"), k=3)
 
-    # Use only top chunk
-    raw_context = texts[idx[0][0]]
-    context = clean_policy_text(raw_context)
+    # Use ONLY top 1 chunk to avoid dumping
+    context = texts[idx[0][0]]
 
     prompt = f"""
 You are a professional HR assistant.
 
-Rules:
-- Answer ONLY using the policy content below
-- Provide a SHORT and NATURAL SUMMARY (2–3 sentences)
-- Do NOT include numbers, clauses, or section references
-- Do NOT assume information
+TASK:
+- Answer using ONLY the policy content below
+- Provide a SHORT and NATURAL SUMMARY
+- Limit to 2–3 sentences
+- Do NOT copy policy text
+- Do NOT repeat information
+- Do NOT mention clauses or page numbers
 
-If the answer is not available, reply exactly:
+If information is not available, reply exactly:
 "I checked the HR policy document, but this information is not mentioned."
 
 Policy Content:
@@ -91,26 +132,30 @@ Policy Content:
 Question:
 {question}
 
-Final Answer:
+Final Answer (summary only):
 """
 
-    result = llm(
+    response = llm(
         prompt,
-        max_new_tokens=100,
+        max_new_tokens=80,
         temperature=0.2,
         do_sample=False
     )[0]["generated_text"]
 
-    return result.strip()
+    return response.strip()
 
 # ---------------- UI ----------------
-st.subheader("💬 Ask a question")
-
-question = st.text_input("Enter your HR policy question")
+st.subheader("💬 Ask HR Policy Question")
+question = st.text_input("Enter your question")
 
 if question:
-    if question.lower() in ["hi", "hello", "hey"]:
-        st.info("Hello 👋 I’m your HR Policy Assistant.")
+    if is_greeting(question):
+        st.info(
+            "Hello 👋 I’m your HR Policy Assistant.\n\n"
+            "You can ask questions like:\n"
+            "- What is the leave policy?\n"
+            "- What is the notice period?\n"
+            "- How many casual leaves are allowed?"
+        )
     else:
-        answer = answer_question(question)
-        st.success(answer)
+        st.success(answer_query(question))
