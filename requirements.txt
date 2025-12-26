@@ -1,9 +1,9 @@
 streamlit
 faiss-cpu
+numpy
 sentence-transformers
 transformers
 torch
 langchain-community
 langchain-text-splitters
 pypdf
-pandas
