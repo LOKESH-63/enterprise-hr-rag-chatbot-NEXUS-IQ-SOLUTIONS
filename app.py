@@ -13,8 +13,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # PAGE CONFIG
 # ======================================================
 st.set_page_config(page_title="NEXUS IQ HR Chatbot", page_icon="🏢")
+
 st.markdown("## 🏢 NEXUS IQ SOLUTIONS")
-st.caption("RAG-based • Clean • Step-by-step HR answers")
+st.caption("RAG-based • Clean HR answers")
 
 st.markdown("### 💬 Ask an HR policy question")
 
@@ -28,7 +29,7 @@ if not os.path.exists(PDF_FILE):
     st.stop()
 
 # ======================================================
-# CLEAN POLICY TEXT
+# CLEAN POLICY TEXT (REMOVE CLAUSES, ROMAN NUMERALS)
 # ======================================================
 def clean_policy_text(text: str) -> str:
     text = re.sub(r"\b\d+(\.\d+)+\b", "", text)
@@ -56,7 +57,7 @@ def extract_relevant_sentences(context: str, question: str) -> list:
         if any(w in s.lower() for w in q_words)
     ]
 
-    return relevant[:4]  # max 4 steps
+    return relevant[:4]  # limit output
 
 # ======================================================
 # LOAD RAG PIPELINE
@@ -73,12 +74,14 @@ def load_rag():
     chunks = splitter.split_documents(documents)
     texts = [c.page_content for c in chunks]
 
+    # Embeddings
     embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
     embeddings = embedder.encode(texts)
 
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(np.array(embeddings).astype("float32"))
 
+    # LLM (rewriter)
     tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
     model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
     llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
@@ -88,7 +91,7 @@ def load_rag():
 embedder, index, texts, llm = load_rag()
 
 # ======================================================
-# ANSWER FUNCTION (RETURNS LIST)
+# ANSWER FUNCTION (RETURNS SENTENCES ONLY)
 # ======================================================
 def answer_question(question: str) -> list:
     q_emb = embedder.encode([question])
@@ -99,7 +102,7 @@ def answer_question(question: str) -> list:
 
     extracted = extract_relevant_sentences(cleaned_context, question)
 
-    return extracted  # return LIST (important)
+    return extracted
 
 # ======================================================
 # UI INPUT & DISPLAY
@@ -107,13 +110,13 @@ def answer_question(question: str) -> list:
 question = st.text_input("Enter your question")
 
 if question:
-    steps = answer_question(question)
+    sentences = answer_question(question)
 
-    if not steps:
+    if not sentences:
         st.warning(
             "I checked the HR policy document, but this information is not mentioned."
         )
     else:
         st.success("Here is the policy information:")
-        for i, step in enumerate(steps, start=1):
-            st.markdown(f"**Step {i}:** {step}")
+        for sentence in sentences:
+            st.markdown(f"- {sentence}")
