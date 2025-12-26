@@ -7,4 +7,3 @@ torch
 langchain-community
 langchain-text-splitters
 pypdf
-
