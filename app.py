@@ -10,7 +10,7 @@ st.title("🏢 NEXUS IQ SOLUTIONS")
 st.caption("Section-aware HR policy assistant — extracts exact policy sections from the uploaded PDF")
 
 # ---------------- PDF PATH (uploaded file) ----------------
-PDF_PATH = "/mnt/data/Sample_HR_Policy_Document.pdf"
+PDF_PATH = "Sample_HR_Policy_Document.pdf"
 if not os.path.exists(PDF_PATH):
     st.error(f"HR Policy PDF not found at {PDF_PATH}. Please upload the PDF to that path.")
     st.stop()
