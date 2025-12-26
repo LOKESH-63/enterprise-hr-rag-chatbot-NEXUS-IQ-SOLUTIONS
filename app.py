@@ -13,8 +13,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # PAGE CONFIG
 # ======================================================
 st.set_page_config(page_title="HR Policy Assistant", page_icon="🏢")
-st.title("🏢 NEXUS IQ SOLUTIONS")
-st.caption("Free • RAG-based • Clean summarized answers")
+st.title("🏢 HR Policy Assistant")
+st.caption("RAG-based • Clean & factual answers • Free models")
 
 # ======================================================
 # PDF FILE
@@ -26,30 +26,50 @@ if not os.path.exists(PDF_FILE):
     st.stop()
 
 # ======================================================
-# STRONG CLEANING FUNCTION (KEY FIX)
+# STRONG CLEANING FUNCTION (NUMBERS + ROMAN NUMERALS)
 # ======================================================
 def clean_policy_text(text: str) -> str:
-    # Remove numbering like 2.2, 3.4.1
+    # Remove numeric clauses (2.2, 3.4.1)
     text = re.sub(r"\b\d+(\.\d+)+\b", "", text)
 
-    # Remove line-start numbers
-    text = re.sub(r"^\s*\d+\s*", "", text, flags=re.MULTILINE)
+    # Remove roman numerals (i., ii., iii., iv.)
+    text = re.sub(
+        r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\.\b",
+        "",
+        text,
+        flags=re.IGNORECASE
+    )
 
-    # Remove extra spaces/newlines
+    # Remove list markers like a), 1)
+    text = re.sub(r"\b[a-zA-Z]\)", "", text)
+    text = re.sub(r"\b\d+\)", "", text)
+
+    # Normalize whitespace
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
+
+# ======================================================
+# DETECT FACTUAL QUESTIONS (KEY FEATURE)
+# ======================================================
+def is_factual_question(question: str) -> bool:
+    keywords = [
+        "how many", "number of", "entitled", "per year",
+        "paid leave", "paid leaves",
+        "casual leave", "sick leave",
+        "days", "leave count"
+    ]
+    q = question.lower()
+    return any(k in q for k in keywords)
 
 # ======================================================
 # LOAD RAG PIPELINE
 # ======================================================
 @st.cache_resource
 def load_rag():
-    # Load PDF
     loader = PyPDFLoader(PDF_FILE)
     documents = loader.load()
 
-    # Split text
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=100
@@ -57,15 +77,12 @@ def load_rag():
     chunks = splitter.split_documents(documents)
     texts = [c.page_content for c in chunks]
 
-    # Embeddings (FREE)
     embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
     embeddings = embedder.encode(texts)
 
-    # FAISS
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(np.array(embeddings).astype("float32"))
 
-    # FREE LLM
     tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
     model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
     llm = pipeline(
@@ -79,29 +96,51 @@ def load_rag():
 embedder, index, texts, llm = load_rag()
 
 # ======================================================
-# ANSWER FUNCTION (STRICT SUMMARY)
+# ANSWER FUNCTION (SUMMARY + FACTUAL MODES)
 # ======================================================
 def answer_question(question: str) -> str:
     q_emb = embedder.encode([question])
     _, idx = index.search(np.array(q_emb).astype("float32"), k=3)
 
-    # Use ONLY ONE chunk
+    # Use only top chunk
     raw_context = texts[idx[0][0]]
     context = clean_policy_text(raw_context)
 
-    prompt = f"""
+    factual = is_factual_question(question)
+
+    if factual:
+        prompt = f"""
 You are an HR policy assistant.
 
-Your task is to SUMMARIZE the information below.
+TASK:
+- Answer using EXACT facts from the policy
+- Include numbers if they are mentioned
+- Be clear and direct
+- Do NOT include clause numbers or headings
 
-STRICT RULES:
-- DO NOT copy sentences from the policy
-- DO NOT include numbers, clauses, or section references
-- Use simple, professional language
+If the information is not available, reply exactly:
+"I checked the HR policy document, but this information is not mentioned."
+
+Policy Content:
+{context}
+
+Question:
+{question}
+
+Direct Answer:
+"""
+    else:
+        prompt = f"""
+You are an HR policy assistant.
+
+TASK:
+- SUMMARIZE the policy information
+- Use natural, professional language
 - Limit to 2–3 short sentences
-- Answer ONLY from the policy content
+- Do NOT include numbers unless necessary
+- Do NOT include clause numbers or headings
 
-If the answer is not available, reply exactly:
+If the information is not available, reply exactly:
 "I checked the HR policy document, but this information is not mentioned."
 
 Policy Content:
@@ -115,14 +154,19 @@ Summary Answer:
 
     result = llm(
         prompt,
-        max_new_tokens=80,
-        temperature=0.1,
+        max_new_tokens=100,
+        temperature=0.0,   # deterministic output
         do_sample=False
     )[0]["generated_text"]
 
     # FINAL SAFETY CLEAN
     answer = re.sub(r"\b\d+(\.\d+)+\b", "", result)
-    answer = re.sub(r"^\s*\d+\s*", "", answer)
+    answer = re.sub(
+        r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\.\b",
+        "",
+        answer,
+        flags=re.IGNORECASE
+    )
     answer = re.sub(r"\s+", " ", answer)
 
     return answer.strip()
@@ -140,3 +184,4 @@ if question:
     else:
         answer = answer_question(question)
         st.success(answer)
+
