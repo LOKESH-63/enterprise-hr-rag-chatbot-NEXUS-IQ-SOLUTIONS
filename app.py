@@ -8,7 +8,7 @@ from langchain_community.document_loaders import PyPDFLoader
 # ======================================================
 st.set_page_config(page_title="NEXUS IQ HR Chatbot", page_icon="🏢")
 st.markdown("## 🏢 NEXUS IQ SOLUTIONS")
-st.caption("HR Policy Assistant • Accurate • Section-based")
+st.caption("HR Policy Assistant • Accurate • Polite")
 st.markdown("### 💬 Ask an HR policy question")
 
 # ======================================================
@@ -58,6 +58,16 @@ def clean_points(section_text):
     return points
 
 # ======================================================
+# GREETING DETECTOR
+# ======================================================
+def is_greeting(text):
+    greetings = [
+        "hi", "hello", "hey",
+        "good morning", "good afternoon", "good evening"
+    ]
+    return text.lower().strip() in greetings
+
+# ======================================================
 # DETECT REQUESTED POLICIES
 # ======================================================
 def detect_requested_policies(question):
@@ -82,21 +92,41 @@ def detect_requested_policies(question):
     return requested
 
 # ======================================================
-# UI LOGIC
+# UI
 # ======================================================
 question = st.text_input("Enter your question")
 
 if question:
-    policies = detect_requested_policies(question)
 
-    if not policies:
-        st.warning("Please ask about a specific HR policy.")
+    # ---------- GREETING ----------
+    if is_greeting(question):
+        st.success(
+            "Hello 👋\n\n"
+            "I’m your HR Policy Assistant.\n\n"
+            "You can ask me questions about company HR policies such as leave, work from home, "
+            "IT and security, working hours, and code of conduct."
+        )
+
     else:
-        for policy in policies:
-            if policy in sections:
-                st.markdown(f"### {policy.title()}")
-                points = clean_points(sections[policy])
-                for p in points:
-                    st.markdown(f"• {p}")
-            else:
-                st.warning(f"{policy.title()} not found in the document.")
+        policies = detect_requested_policies(question)
+
+        # ---------- NO POLICY FOUND ----------
+        if not policies:
+            st.warning(
+                "I checked the HR policy document, but this information is not mentioned.\n\n"
+                "Please contact the HR team for further clarification."
+            )
+
+        # ---------- SHOW POLICIES ----------
+        else:
+            for policy in policies:
+                if policy in sections:
+                    st.markdown(f"### {policy.title()}")
+                    points = clean_points(sections[policy])
+                    for p in points:
+                        st.markdown(f"• {p}")
+                else:
+                    st.warning(
+                        f"I checked the HR policy document, but details about **{policy.title()}** "
+                        "are not available."
+                    )
