@@ -13,8 +13,22 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # PAGE CONFIG
 # ======================================================
 st.set_page_config(page_title="NEXUS IQ HR Chatbot", page_icon="🏢")
+
 st.markdown("## 🏢 NEXUS IQ SOLUTIONS")
 st.caption("RAG-based • Clean & factual answers • Free models")
+
+# ======================================================
+# INSTRUCTION TEXT (YOUR REQUEST)
+# ======================================================
+st.markdown(
+    """
+### 💬 Ask an HR policy question  
+**Examples:**  
+- *What is the leave policy?*  
+- *How to avail medical insurance?*  
+- *How many sick leaves are allowed?*  
+"""
+)
 
 # ======================================================
 # PDF FILE
@@ -26,31 +40,23 @@ if not os.path.exists(PDF_FILE):
     st.stop()
 
 # ======================================================
-# STRONG CLEANING FUNCTION
+# CLEAN POLICY TEXT
 # ======================================================
 def clean_policy_text(text: str) -> str:
-    # Remove numeric clauses (2.2, 3.4.1)
     text = re.sub(r"\b\d+(\.\d+)+\b", "", text)
-
-    # Remove roman numerals (i., ii., iii.)
     text = re.sub(
         r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\b\.?",
         "",
         text,
         flags=re.IGNORECASE
     )
-
-    # Remove bullets and list markers
     text = re.sub(r"[•–—-]", " ", text)
     text = re.sub(r"\b[a-zA-Z]\)", "", text)
-
-    # Normalize whitespace
     text = re.sub(r"\s+", " ", text)
-
     return text.strip()
 
 # ======================================================
-# EXTRACT RELEVANT SENTENCES (KEY FIX)
+# EXTRACT RELEVANT SENTENCES
 # ======================================================
 def extract_relevant_sentences(context: str, question: str) -> str:
     sentences = re.split(r"(?<=[.!?])\s+", context)
@@ -61,7 +67,22 @@ def extract_relevant_sentences(context: str, question: str) -> str:
         if any(w in s.lower() for w in q_words)
     ]
 
-    return " ".join(relevant[:3])
+    return " ".join(relevant[:4])
+
+# ======================================================
+# DETECT POLICY OVERVIEW QUESTIONS
+# ======================================================
+def is_policy_overview(question: str) -> bool:
+    keywords = [
+        "leave policy",
+        "what is the leave policy",
+        "medical insurance",
+        "insurance policy",
+        "policy details",
+        "types of leave"
+    ]
+    q = question.lower()
+    return any(k in q for k in keywords)
 
 # ======================================================
 # LOAD RAG PIPELINE
@@ -86,18 +107,14 @@ def load_rag():
 
     tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
     model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
-    llm = pipeline(
-        "text2text-generation",
-        model=model,
-        tokenizer=tokenizer
-    )
+    llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
 
     return embedder, index, texts, llm
 
 embedder, index, texts, llm = load_rag()
 
 # ======================================================
-# ANSWER FUNCTION (FINAL – EXTRACT → REWRITE)
+# ANSWER FUNCTION
 # ======================================================
 def answer_question(question: str) -> str:
     q_emb = embedder.encode([question])
@@ -106,24 +123,41 @@ def answer_question(question: str) -> str:
     raw_context = texts[idx[0][0]]
     cleaned_context = clean_policy_text(raw_context)
 
-    extracted = extract_relevant_sentences(
-        cleaned_context, question
-    )
+    extracted = extract_relevant_sentences(cleaned_context, question)
 
     if not extracted.strip():
         return "I checked the HR policy document, but this information is not mentioned."
 
-    prompt = f"""
+    overview = is_policy_overview(question)
+
+    if overview:
+        prompt = f"""
+You are an HR assistant.
+
+Convert the information below into clear bullet points.
+
+RULES:
+- Use bullet points (•)
+- One fact per bullet
+- Include numbers if present
+- Do NOT include headings or section titles
+- Do NOT include roman numerals
+
+Information:
+{extracted}
+
+Bullet Point Answer:
+"""
+    else:
+        prompt = f"""
 You are an HR assistant.
 
 Rewrite the information below into a clean, natural answer.
 
 RULES:
-- Do NOT mention headings or section titles
-- Do NOT use bullet points
-- Do NOT include numbering or roman numerals
 - Write 2–3 professional sentences
-- Use simple, employee-friendly language
+- Do NOT include headings or numbering
+- Use simple employee-friendly language
 
 Information:
 {extracted}
@@ -133,27 +167,26 @@ Final Answer:
 
     result = llm(
         prompt,
-        max_new_tokens=80,
+        max_new_tokens=100,
         temperature=0.0,
         do_sample=False
     )[0]["generated_text"]
 
-    # FINAL HARD CLEAN
-    result = re.sub(r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\b", "", result, flags=re.I)
+    result = re.sub(
+        r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\b",
+        "",
+        result,
+        flags=re.IGNORECASE
+    )
     result = re.sub(r"\s+", " ", result)
 
     return result.strip()
 
 # ======================================================
-# UI
+# UI INPUT
 # ======================================================
-st.subheader("💬 Ask an HR policy question")
-
 question = st.text_input("Enter your question")
 
 if question:
-    if question.lower() in ["hi", "hello", "hey"]:
-        st.info("Hello 👋 I’m your HR Policy Assistant.")
-    else:
-        answer = answer_question(question)
-        st.success(answer)
+    answer = answer_question(question)
+    st.success(answer)
