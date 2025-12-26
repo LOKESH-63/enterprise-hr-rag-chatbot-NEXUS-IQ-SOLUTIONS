@@ -13,7 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # PAGE CONFIG
 # ======================================================
 st.set_page_config(page_title="HR Policy Assistant", page_icon="🏢")
-st.title("🏢 HR Policy Assistant")
+st.title("🏢 NEXUS IQ SOLUTIONS")
 st.caption("RAG-based • Clean & factual answers • Free models")
 
 # ======================================================
