@@ -7,189 +7,175 @@ from langchain_community.document_loaders import PyPDFLoader
 # ---------------- PAGE ----------------
 st.set_page_config(page_title="HR Policy Assistant", page_icon="🏢")
 st.title("🏢 NEXUS IQ SOLUTIONS")
-st.caption("Section-aware HR policy assistant — extracts exact policy sections from the uploaded PDF")
+st.caption(
+    "Section-aware HR policy assistant — retrieves exact policy content from the official HR document"
+)
 
-# ---------------- PDF PATH (uploaded file) ----------------
+# ---------------- PDF PATH ----------------
 PDF_PATH = "Sample_HR_Policy_Document.pdf"
 if not os.path.exists(PDF_PATH):
-    st.error(f"HR Policy PDF not found at {PDF_PATH}. Please upload the PDF to that path.")
+    st.error(f"HR Policy PDF not found at {PDF_PATH}. Please upload the PDF to this path.")
     st.stop()
 
-# ---------------- LOAD PDF & BUILD FULL TEXT ----------------
+# ---------------- LOAD PDF ----------------
 @st.cache_resource
 def load_pdf_text(path: str) -> str:
     loader = PyPDFLoader(path)
     pages = loader.load()
-    full_text = "\n".join([p.page_content for p in pages])
-    return full_text
+    return "\n".join(p.page_content for p in pages)
 
 full_text = load_pdf_text(PDF_PATH)
 
-# ---------------- EXTRACT SECTIONS (by numeric headings "N. Title") ----------------
+# ---------------- EXTRACT SECTIONS ----------------
 def extract_sections(text: str) -> dict:
     """
-    Returns dict: {normalized_title: {"title": original_title, "content": text}}
-    Splits on lines like: '\n2. Working Hours Policy\n'
+    Extract sections based on headings like:
+    3. Leave Policy
     """
-    # find header matches
-    header_pattern = re.compile(r"\n\s*(\d+)\.\s*([A-Za-z0-9 &()/-]+)\s*\n")
-    matches = list(header_pattern.finditer(text))
+    pattern = re.compile(r"\n\s*(\d+)\.\s*([A-Za-z0-9 &()/-]+)\s*\n")
+    matches = list(pattern.finditer(text))
 
     sections = {}
     if not matches:
-        # fallback: whole document as a single section
-        sections["full_document"] = {"title": "Document", "content": text}
+        sections["document"] = {"title": "HR Policy Document", "content": text}
         return sections
 
     for i, m in enumerate(matches):
         start = m.end()
-        title_num = m.group(1).strip()
-        title_raw = m.group(2).strip()
+        title = m.group(2).strip()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         content = text[start:end].strip()
 
-        # Normalize key: keep only letters/numbers and spaces, lowercased
-        key = re.sub(r"[^a-z0-9 ]+", "", title_raw.lower()).strip()
-        sections[key] = {"title": title_raw, "content": content}
+        key = re.sub(r"[^a-z0-9 ]+", "", title.lower()).strip()
+        sections[key] = {"title": title, "content": content}
 
     return sections
 
 sections = extract_sections(full_text)
 
-# ---------------- CLEAN SECTION TEXT (remove list indices but preserve numbers in sentences) ----------------
+# ---------------- CLEAN SECTION CONTENT ----------------
 def clean_section_text(text: str) -> str:
-    # Remove bullets like '1 • ' or '1.' at the start of lines, but not numbers inside sentences
+    # remove bullet numbers at start of lines
     text = re.sub(r"(?m)^\s*\d+\s*[•\.\-\)]\s*", "", text)
+    text = re.sub(r"\n{2,}", "\n", text)
+    return text.strip()
 
-    # Remove stray headings like "Leave Policy" if they appear inline (we will display the heading separately)
-    # but avoid removing the words 'leave' etc. inside sentences.
-    text = re.sub(r"(?mi)^\s*(leave|work from home|working hours|code of conduct|performance management|training and development|insurance and health benefits|it and security|grievance redressal|disciplinary action|policy amendments)\s*\n", "", text)
-
-    # Normalize whitespace
-    text = re.sub(r"\s+\n", "\n", text)
-    text = re.sub(r"\n{2,}", "\n\n", text)
-    text = text.strip()
-    return text
-
-# ---------------- SPLIT INTO MEANINGFUL LINES / SENTENCES ----------------
-def split_to_statements(text: str) -> list:
-    # Split on sentence endings while keeping abbreviations safe (simple approach)
-    # First split by newlines (many policy items are on separate lines)
-    lines = []
-    for part in text.split("\n"):
-        part = part.strip()
-        if not part:
+# ---------------- SPLIT INTO SENTENCES ----------------
+def split_to_sentences(text: str) -> list:
+    sentences = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
             continue
-        # If the line contains multiple sentences, split into sentences
-        sentences = re.split(r'(?<=[.!?])\s+', part)
-        for s in sentences:
-            s = s.strip()
-            if len(s) > 6:
-                lines.append(s)
-    return lines
+        parts = re.split(r"(?<=[.!?])\s+", line)
+        for p in parts:
+            if len(p.strip()) > 6:
+                sentences.append(p.strip())
+    return sentences
 
-# ---------------- SECTION KEYWORD MAPPING ----------------
-# Map user intents/keywords to normalized section keys present in the PDF
+# ---------------- BUILD KEYWORD ALIASES ----------------
 def build_section_aliases(sections_dict: dict) -> dict:
-    # Create a reverse map of available section keys -> title
     aliases = {}
     for key, meta in sections_dict.items():
-        aliases[key] = [key]  # default alias is the normalized key itself
-        # also add some common phrases based on the title
-        t = meta["title"].lower()
-        if "leave" in t:
-            aliases[key].extend(["leave", "leave policy", "paid leave", "casual leave", "sick leave"])
-        if "work from home" in t or "wfh" in t:
-            aliases[key].extend(["work from home", "wfh", "remote work"])
-        if "working hours" in t:
-            aliases[key].extend(["working hours", "attendance", "office hours"])
-        if "code of conduct" in t:
-            aliases[key].extend(["code of conduct", "conduct", "behavior", "harassment"])
-        if "performance" in t:
-            aliases[key].extend(["performance", "performance management", "kpi", "kpis"])
-        if "training" in t:
-            aliases[key].extend(["training", "training and development", "learning", "development"])
-        if "insurance" in t or "health" in t:
-            aliases[key].extend(["insurance", "medical insurance", "health insurance", "benefits"])
-        if "it" in t or "security" in t:
-            aliases[key].extend(["it", "security", "it security", "data security", "password"])
-        if "grievance" in t:
-            aliases[key].extend(["grievance", "complaint", "grievance redressal"])
-        if "disciplinary" in t:
-            aliases[key].extend(["disciplinary", "discipline", "disciplinary action"])
-        if "policy amend" in t or "amend" in t:
-            aliases[key].extend(["policy amendment", "amendment", "policy changes"])
-    # normalize strings
-    for k, vals in list(aliases.items()):
-        aliases[k] = list({v.lower() for v in vals})
+        title = meta["title"].lower()
+        words = [key]
+
+        if "leave" in title:
+            words += ["leave", "leave policy", "paid leave", "casual leave", "sick leave"]
+        if "work from home" in title or "wfh" in title:
+            words += ["work from home", "wfh", "remote work"]
+        if "working hours" in title:
+            words += ["working hours", "office hours", "attendance"]
+        if "insurance" in title or "health" in title:
+            words += ["insurance", "medical insurance", "health insurance"]
+        if "performance" in title:
+            words += ["performance", "performance management", "kpi"]
+        if "training" in title:
+            words += ["training", "learning", "development"]
+        if "it" in title or "security" in title:
+            words += ["it", "security", "password", "data security"]
+        if "conduct" in title:
+            words += ["conduct", "behavior", "harassment"]
+        if "disciplinary" in title:
+            words += ["disciplinary", "discipline"]
+
+        aliases[key] = list(set(w.lower() for w in words))
     return aliases
 
 section_aliases = build_section_aliases(sections)
 
-# ---------------- DETECT REQUESTED SECTIONS ----------------
-def detect_requested_sections(question: str, aliases: dict) -> list:
+# ---------------- INTENT VALIDATION ----------------
+def section_answers_question(question: str, section_text: str) -> bool:
     q = question.lower()
-    requested = []
-    # If user asks for multiple policies joined by 'and', split and detect separately
-    # but simpler: check all aliases; include section if any alias keyword appears in q
-    for key, keywords in aliases.items():
-        for kw in keywords:
-            if kw and kw in q:
-                requested.append(key)
-                break
-    # If none found, attempt a looser check by word overlap
-    if not requested:
+    text = section_text.lower()
+
+    if any(w in q for w in ["how", "process", "avail", "enroll", "apply"]):
+        return any(k in text for k in ["apply", "process", "procedure", "portal", "submit", "enroll"])
+
+    if "claim" in q:
+        return any(k in text for k in ["claim", "reimbursement", "cashless"])
+
+    return True  # factual questions
+
+# ---------------- DETECT SECTIONS ----------------
+def detect_requested_sections(question: str) -> list:
+    q = question.lower()
+    found = []
+
+    for key, kws in section_aliases.items():
+        if any(k in q for k in kws):
+            found.append(key)
+
+    if not found:
         q_words = set(re.findall(r"[a-z]{3,}", q))
         for key, meta in sections.items():
-            header_words = set(re.findall(r"[a-z]{3,}", meta["title"].lower()))
-            if q_words & header_words:
-                requested.append(key)
-    # unique & preserve order
-    seen = set()
-    out = []
-    for k in requested:
-        if k not in seen:
-            seen.add(k)
-            out.append(k)
-    return out
+            title_words = set(re.findall(r"[a-z]{3,}", meta["title"].lower()))
+            if q_words & title_words:
+                found.append(key)
 
-# ---------------- GREETING & POLITE FALLBACK ----------------
+    return list(dict.fromkeys(found))
+
+# ---------------- GREETING ----------------
 def is_greeting(text: str) -> bool:
-    return text.strip().lower() in {"hi", "hello", "hey", "good morning", "good afternoon", "good evening"}
+    return text.strip().lower() in {
+        "hi", "hello", "hey", "good morning", "good afternoon", "good evening"
+    }
 
 # ---------------- UI ----------------
-st.write("Enter a question about the HR policies (e.g., 'What is the leave policy?', 'What is the WFH policy?', 'What is performance management?')")
-
 question = st.text_input("Enter your question")
 
 if question:
-    # greeting
     if is_greeting(question):
-        st.success("Hello 👋 I’m your HR Policy Assistant. Ask me about leave, WFH, working hours, IT & security, insurance, performance, training, and more.")
+        st.success(
+            "Hello 👋 I’m your HR Policy Assistant. "
+            "You can ask me about leave, working hours, WFH, insurance, IT & security, performance, and more."
+        )
     else:
-        requested = detect_requested_sections(question, section_aliases)
+        requested = detect_requested_sections(question)
+        shown = False
 
-        if not requested:
-            st.warning("I checked the HR policy document, but this information is not mentioned. Please contact the HR team for further clarification.")
-        else:
-            for key in requested:
-                meta = sections.get(key)
-                if not meta:
-                    st.warning(f"Section for '{key}' not found.")
-                    continue
+        for key in requested:
+            meta = sections.get(key)
+            if not meta:
+                continue
 
-                # Show the title as the section heading
-                st.markdown(f"### {meta['title']}")
+            cleaned = clean_section_text(meta["content"])
 
-                # Clean and split content into statements
-                cleaned = clean_section_text(meta["content"])
-                statements = split_to_statements(cleaned)
+            if not section_answers_question(question, cleaned):
+                continue
 
-                if not statements:
-                    st.info("This section exists but no extractable statements were found.")
-                    continue
+            sentences = split_to_sentences(cleaned)
+            if not sentences:
+                continue
 
-                # Display each statement as a plain sentence (no extra internal titles)
-                for s in statements:
-                    st.markdown(s)
+            st.markdown(f"### {meta['title']}")
+            for s in sentences:
+                st.markdown(s)
 
+            shown = True
+
+        if not shown:
+            st.warning(
+                "I checked the HR policy document, but this specific information is not mentioned.\n\n"
+                "Please contact the HR team for further clarification."
+            )
