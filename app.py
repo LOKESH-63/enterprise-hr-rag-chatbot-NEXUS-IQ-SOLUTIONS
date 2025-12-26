@@ -13,9 +13,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # PAGE CONFIG
 # ======================================================
 st.set_page_config(page_title="NEXUS IQ HR Chatbot", page_icon="🏢")
-
 st.markdown("## 🏢 NEXUS IQ SOLUTIONS")
-st.caption("RAG-based • Clean & step-by-step answers • Free models")
+st.caption("RAG-based • Clean • Step-by-step HR answers")
 
 st.markdown("### 💬 Ask an HR policy question")
 
@@ -52,11 +51,12 @@ def extract_relevant_sentences(context: str, question: str) -> list:
     q_words = [w for w in question.lower().split() if len(w) > 3]
 
     relevant = [
-        s.strip() for s in sentences
+        s.strip()
+        for s in sentences
         if any(w in s.lower() for w in q_words)
     ]
 
-    return relevant[:4]
+    return relevant[:4]  # max 4 steps
 
 # ======================================================
 # LOAD RAG PIPELINE
@@ -88,34 +88,32 @@ def load_rag():
 embedder, index, texts, llm = load_rag()
 
 # ======================================================
-# ANSWER FUNCTION (STEP-BY-STEP OUTPUT)
+# ANSWER FUNCTION (RETURNS LIST)
 # ======================================================
-def answer_question(question: str) -> str:
+def answer_question(question: str) -> list:
     q_emb = embedder.encode([question])
     _, idx = index.search(np.array(q_emb).astype("float32"), k=3)
 
     raw_context = texts[idx[0][0]]
     cleaned_context = clean_policy_text(raw_context)
 
-    extracted_sentences = extract_relevant_sentences(
-        cleaned_context, question
-    )
+    extracted = extract_relevant_sentences(cleaned_context, question)
 
-    if not extracted_sentences:
-        return "I checked the HR policy document, but this information is not mentioned."
-
-    steps = []
-    for i, sentence in enumerate(extracted_sentences, start=1):
-        steps.append(f"Step {i}: {sentence}")
-
-    return "\n".join(steps)
+    return extracted  # return LIST (important)
 
 # ======================================================
-# UI INPUT
+# UI INPUT & DISPLAY
 # ======================================================
 question = st.text_input("Enter your question")
 
 if question:
-    answer = answer_question(question)
-    st.success(answer)
+    steps = answer_question(question)
 
+    if not steps:
+        st.warning(
+            "I checked the HR policy document, but this information is not mentioned."
+        )
+    else:
+        st.success("Here is the policy information:")
+        for i, step in enumerate(steps, start=1):
+            st.markdown(f"**Step {i}:** {step}")
