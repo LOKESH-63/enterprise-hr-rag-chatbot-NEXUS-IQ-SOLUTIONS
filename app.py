@@ -1,23 +1,18 @@
 import streamlit as st
-import faiss
-import numpy as np
-import os
 import re
-
-from sentence_transformers import SentenceTransformer
+import os
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # ======================================================
 # PAGE CONFIG
 # ======================================================
 st.set_page_config(page_title="NEXUS IQ HR Chatbot", page_icon="🏢")
 st.markdown("## 🏢 NEXUS IQ SOLUTIONS")
-st.caption("RAG-based • Clean • Accurate HR answers")
+st.caption("HR Policy Assistant • Accurate • Section-based")
 st.markdown("### 💬 Ask an HR policy question")
 
 # ======================================================
-# PDF FILE
+# LOAD PDF
 # ======================================================
 PDF_FILE = "Sample_HR_Policy_Document.pdf"
 
@@ -25,122 +20,83 @@ if not os.path.exists(PDF_FILE):
     st.error("HR Policy PDF not found.")
     st.stop()
 
-# ======================================================
-# CLEAN TEXT (REMOVE STRUCTURE, KEEP MEANING)
-# ======================================================
-def clean_policy_text(text: str) -> str:
-    # Remove section headers like "4. Work From Home (WFH) Policy"
-    text = re.sub(
-        r"\n?\d+\.\s*[A-Za-z &()]+Policy\n?",
-        "\n",
-        text
-    )
-
-    # Remove leading numbering like "1 •", "2 •"
-    text = re.sub(
-        r"^\s*\d+\s*[•.-]?\s*",
-        "",
-        text,
-        flags=re.MULTILINE
-    )
-
-    # Remove bullets only
-    text = re.sub(r"[•–—]", "", text)
-
-    # Normalize spaces
-    text = re.sub(r"\s+", " ", text)
-
-    return text.strip()
+loader = PyPDFLoader(PDF_FILE)
+pages = loader.load()
+full_text = "\n".join([p.page_content for p in pages])
 
 # ======================================================
-# DETECT SECTION (FOR ACCURATE RETRIEVAL)
+# SPLIT PDF INTO POLICY SECTIONS
 # ======================================================
-def detect_section_keywords(question: str) -> list:
+def extract_sections(text):
+    pattern = r"\n\d+\.\s+[A-Za-z ()]+\n"
+    matches = re.split(pattern, text)
+    headers = re.findall(pattern, text)
+
+    sections = {}
+    for i, header in enumerate(headers):
+        title = re.sub(r"\d+\.|\n", "", header).strip()
+        content = matches[i + 1]
+        sections[title.lower()] = content.strip()
+
+    return sections
+
+sections = extract_sections(full_text)
+
+# ======================================================
+# CLEAN BULLET POINTS
+# ======================================================
+def clean_points(section_text):
+    lines = section_text.split("\n")
+    points = []
+
+    for line in lines:
+        line = re.sub(r"^\s*\d+\s*[•.-]?\s*", "", line)
+        line = line.strip()
+        if len(line) > 5:
+            points.append(line)
+
+    return points
+
+# ======================================================
+# DETECT REQUESTED POLICIES
+# ======================================================
+def detect_requested_policies(question):
     q = question.lower()
-
-    if "work from home" in q or "wfh" in q:
-        return ["work from home", "wfh"]
+    requested = []
 
     if "leave" in q:
-        return ["leave"]
+        requested.append("leave policy")
+
+    if "work from home" in q or "wfh" in q:
+        requested.append("work from home (wfh) policy")
+
+    if "working hours" in q:
+        requested.append("working hours policy")
 
     if "security" in q or "it" in q:
-        return ["security", "password", "device", "data"]
+        requested.append("it and security policy")
 
-    if "working hours" in q or "office time" in q:
-        return ["working hours"]
+    if "code of conduct" in q:
+        requested.append("code of conduct")
 
-    return []
-
-# ======================================================
-# LOAD DOCUMENTS + EMBEDDINGS
-# ======================================================
-@st.cache_resource
-def load_data():
-    loader = PyPDFLoader(PDF_FILE)
-    documents = loader.load()
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=100
-    )
-    chunks = splitter.split_documents(documents)
-    texts = [c.page_content for c in chunks]
-
-    embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
-    embeddings = embedder.encode(texts)
-
-    return texts, embeddings, embedder
-
-texts, embeddings, embedder = load_data()
+    return requested
 
 # ======================================================
-# ANSWER FUNCTION (SECTION-ACCURATE, COMPLETE)
-# ======================================================
-def answer_question(question: str) -> list:
-    keywords = detect_section_keywords(question)
-
-    # Filter chunks by section keywords
-    if keywords:
-        filtered_texts = [
-            t for t in texts
-            if any(k in t.lower() for k in keywords)
-        ]
-    else:
-        filtered_texts = texts
-
-    if not filtered_texts:
-        return []
-
-    filtered_embeddings = embedder.encode(filtered_texts)
-    index = faiss.IndexFlatL2(filtered_embeddings.shape[1])
-    index.add(np.array(filtered_embeddings).astype("float32"))
-
-    q_emb = embedder.encode([question])
-    _, idx = index.search(np.array(q_emb).astype("float32"), k=1)
-
-    raw_context = filtered_texts[idx[0][0]]
-    cleaned = clean_policy_text(raw_context)
-
-    # Split into sentences (KEEP ALL RULES)
-    sentences = re.split(r"(?<=[.!?])\s+", cleaned)
-
-    return [s.strip() for s in sentences if len(s.strip()) > 10]
-
-# ======================================================
-# UI
+# UI LOGIC
 # ======================================================
 question = st.text_input("Enter your question")
 
 if question:
-    sentences = answer_question(question)
+    policies = detect_requested_policies(question)
 
-    if not sentences:
-        st.warning(
-            "I checked the HR policy document, but this information is not mentioned."
-        )
+    if not policies:
+        st.warning("Please ask about a specific HR policy.")
     else:
-        st.success("Here is the policy information:")
-        for s in sentences:
-            st.markdown(s)
-
+        for policy in policies:
+            if policy in sections:
+                st.markdown(f"### {policy.title()}")
+                points = clean_points(sections[policy])
+                for p in points:
+                    st.markdown(f"• {p}")
+            else:
+                st.warning(f"{policy.title()} not found in the document.")
