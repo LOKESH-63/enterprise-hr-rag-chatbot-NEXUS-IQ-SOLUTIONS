@@ -15,7 +15,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 st.set_page_config(page_title="NEXUS IQ HR Chatbot", page_icon="🏢")
 
 st.markdown("## 🏢 NEXUS IQ SOLUTIONS")
-st.caption("RAG-based • Clean HR answers")
+st.caption("RAG-based • Clean HR answers • Section-aware retrieval")
 
 st.markdown("### 💬 Ask an HR policy question")
 
@@ -29,20 +29,56 @@ if not os.path.exists(PDF_FILE):
     st.stop()
 
 # ======================================================
-# CLEAN POLICY TEXT (REMOVE CLAUSES, ROMAN NUMERALS)
+# CLEAN POLICY TEXT
 # ======================================================
 def clean_policy_text(text: str) -> str:
-    text = re.sub(r"\b\d+(\.\d+)+\b", "", text)
+    # Remove clause numbers (1, 2.3, 6.1.2)
+    text = re.sub(r"\b\d+(\.\d+)*\b", "", text)
+
+    # Remove roman numerals
     text = re.sub(
         r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\b\.?",
         "",
         text,
         flags=re.IGNORECASE
     )
+
+    # Remove policy labels
+    text = re.sub(
+        r"\b(working hours|leave|wfh|work from home|it and security|information security|security)\s+policy\b",
+        "",
+        text,
+        flags=re.IGNORECASE
+    )
+    text = re.sub(r"\bpolicy\b", "", text, flags=re.IGNORECASE)
+
+    # Remove bullets/dashes
     text = re.sub(r"[•–—-]", " ", text)
-    text = re.sub(r"\b[a-zA-Z]\)", "", text)
+
+    # Normalize spaces
     text = re.sub(r"\s+", " ", text)
+
     return text.strip()
+
+# ======================================================
+# SECTION KEYWORD DETECTION
+# ======================================================
+def detect_section_keywords(question: str) -> list:
+    q = question.lower()
+
+    if "security" in q or "it" in q:
+        return ["security", "password", "device", "data"]
+
+    if "leave" in q:
+        return ["leave", "casual", "sick"]
+
+    if "working hours" in q or "office time" in q:
+        return ["working hours", "office", "time"]
+
+    if "work from home" in q or "wfh" in q:
+        return ["work from home", "wfh", "remote"]
+
+    return []
 
 # ======================================================
 # EXTRACT RELEVANT SENTENCES
@@ -57,7 +93,7 @@ def extract_relevant_sentences(context: str, question: str) -> list:
         if any(w in s.lower() for w in q_words)
     ]
 
-    return relevant[:4]  # limit output
+    return relevant[:4]
 
 # ======================================================
 # LOAD RAG PIPELINE
@@ -74,35 +110,45 @@ def load_rag():
     chunks = splitter.split_documents(documents)
     texts = [c.page_content for c in chunks]
 
-    # Embeddings
     embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
     embeddings = embedder.encode(texts)
 
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings).astype("float32"))
+    return embedder, texts, embeddings
 
-    # LLM (rewriter)
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
-    llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-
-    return embedder, index, texts, llm
-
-embedder, index, texts, llm = load_rag()
+embedder, texts, embeddings = load_rag()
 
 # ======================================================
-# ANSWER FUNCTION (RETURNS SENTENCES ONLY)
+# ANSWER FUNCTION (SECTION-AWARE)
 # ======================================================
 def answer_question(question: str) -> list:
-    q_emb = embedder.encode([question])
-    _, idx = index.search(np.array(q_emb).astype("float32"), k=3)
+    keywords = detect_section_keywords(question)
 
-    raw_context = texts[idx[0][0]]
+    # Filter chunks by detected section
+    if keywords:
+        filtered = [
+            t for t in texts
+            if any(k in t.lower() for k in keywords)
+        ]
+    else:
+        filtered = texts
+
+    if not filtered:
+        return []
+
+    filtered_embeddings = embedder.encode(filtered)
+
+    index = faiss.IndexFlatL2(filtered_embeddings.shape[1])
+    index.add(np.array(filtered_embeddings).astype("float32"))
+
+    q_emb = embedder.encode([question])
+    _, idx = index.search(np.array(q_emb).astype("float32"), k=1)
+
+    raw_context = filtered[idx[0][0]]
     cleaned_context = clean_policy_text(raw_context)
 
-    extracted = extract_relevant_sentences(cleaned_context, question)
+    sentences = extract_relevant_sentences(cleaned_context, question)
 
-    return extracted
+    return sentences
 
 # ======================================================
 # UI INPUT & DISPLAY
@@ -119,4 +165,4 @@ if question:
     else:
         st.success("Here is the policy information:")
         for sentence in sentences:
-            st.markdown(f"- {sentence}")
+            st.markdown(sentence)
