@@ -5,7 +5,6 @@ import os
 import re
 
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -13,10 +12,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # PAGE CONFIG
 # ======================================================
 st.set_page_config(page_title="NEXUS IQ HR Chatbot", page_icon="🏢")
-
 st.markdown("## 🏢 NEXUS IQ SOLUTIONS")
-st.caption("RAG-based • Clean HR answers • Section-aware retrieval")
-
+st.caption("RAG-based • Clean • Accurate HR answers")
 st.markdown("### 💬 Ask an HR policy question")
 
 # ======================================================
@@ -25,35 +22,30 @@ st.markdown("### 💬 Ask an HR policy question")
 PDF_FILE = "Sample_HR_Policy_Document.pdf"
 
 if not os.path.exists(PDF_FILE):
-    st.error("HR Policy PDF not found. Please add Sample_HR_Policy_Document.pdf")
+    st.error("HR Policy PDF not found.")
     st.stop()
 
 # ======================================================
-# CLEAN POLICY TEXT
+# CLEAN TEXT (REMOVE STRUCTURE, KEEP MEANING)
 # ======================================================
 def clean_policy_text(text: str) -> str:
-    # Remove clause numbers (1, 2.3, 6.1.2)
-    text = re.sub(r"\b\d+(\.\d+)*\b", "", text)
-
-    # Remove roman numerals
+    # Remove section headers like "4. Work From Home (WFH) Policy"
     text = re.sub(
-        r"\b(i|ii|iii|iv|v|vi|vii|viii|ix|x)\b\.?",
-        "",
-        text,
-        flags=re.IGNORECASE
+        r"\n?\d+\.\s*[A-Za-z &()]+Policy\n?",
+        "\n",
+        text
     )
 
-    # Remove policy labels
+    # Remove leading numbering like "1 •", "2 •"
     text = re.sub(
-        r"\b(working hours|leave|wfh|work from home|it and security|information security|security)\s+policy\b",
+        r"^\s*\d+\s*[•.-]?\s*",
         "",
         text,
-        flags=re.IGNORECASE
+        flags=re.MULTILINE
     )
-    text = re.sub(r"\bpolicy\b", "", text, flags=re.IGNORECASE)
 
-    # Remove bullets/dashes
-    text = re.sub(r"[•–—-]", " ", text)
+    # Remove bullets only
+    text = re.sub(r"[•–—]", "", text)
 
     # Normalize spaces
     text = re.sub(r"\s+", " ", text)
@@ -61,45 +53,30 @@ def clean_policy_text(text: str) -> str:
     return text.strip()
 
 # ======================================================
-# SECTION KEYWORD DETECTION
+# DETECT SECTION (FOR ACCURATE RETRIEVAL)
 # ======================================================
 def detect_section_keywords(question: str) -> list:
     q = question.lower()
 
+    if "work from home" in q or "wfh" in q:
+        return ["work from home", "wfh"]
+
+    if "leave" in q:
+        return ["leave"]
+
     if "security" in q or "it" in q:
         return ["security", "password", "device", "data"]
 
-    if "leave" in q:
-        return ["leave", "casual", "sick"]
-
     if "working hours" in q or "office time" in q:
-        return ["working hours", "office", "time"]
-
-    if "work from home" in q or "wfh" in q:
-        return ["work from home", "wfh", "remote"]
+        return ["working hours"]
 
     return []
 
 # ======================================================
-# EXTRACT RELEVANT SENTENCES
-# ======================================================
-def extract_relevant_sentences(context: str, question: str) -> list:
-    sentences = re.split(r"(?<=[.!?])\s+", context)
-    q_words = [w for w in question.lower().split() if len(w) > 3]
-
-    relevant = [
-        s.strip()
-        for s in sentences
-        if any(w in s.lower() for w in q_words)
-    ]
-
-    return relevant[:4]
-
-# ======================================================
-# LOAD RAG PIPELINE
+# LOAD DOCUMENTS + EMBEDDINGS
 # ======================================================
 @st.cache_resource
-def load_rag():
+def load_data():
     loader = PyPDFLoader(PDF_FILE)
     documents = loader.load()
 
@@ -113,45 +90,45 @@ def load_rag():
     embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
     embeddings = embedder.encode(texts)
 
-    return embedder, texts, embeddings
+    return texts, embeddings, embedder
 
-embedder, texts, embeddings = load_rag()
+texts, embeddings, embedder = load_data()
 
 # ======================================================
-# ANSWER FUNCTION (SECTION-AWARE)
+# ANSWER FUNCTION (SECTION-ACCURATE, COMPLETE)
 # ======================================================
 def answer_question(question: str) -> list:
     keywords = detect_section_keywords(question)
 
-    # Filter chunks by detected section
+    # Filter chunks by section keywords
     if keywords:
-        filtered = [
+        filtered_texts = [
             t for t in texts
             if any(k in t.lower() for k in keywords)
         ]
     else:
-        filtered = texts
+        filtered_texts = texts
 
-    if not filtered:
+    if not filtered_texts:
         return []
 
-    filtered_embeddings = embedder.encode(filtered)
-
+    filtered_embeddings = embedder.encode(filtered_texts)
     index = faiss.IndexFlatL2(filtered_embeddings.shape[1])
     index.add(np.array(filtered_embeddings).astype("float32"))
 
     q_emb = embedder.encode([question])
     _, idx = index.search(np.array(q_emb).astype("float32"), k=1)
 
-    raw_context = filtered[idx[0][0]]
-    cleaned_context = clean_policy_text(raw_context)
+    raw_context = filtered_texts[idx[0][0]]
+    cleaned = clean_policy_text(raw_context)
 
-    sentences = extract_relevant_sentences(cleaned_context, question)
+    # Split into sentences (KEEP ALL RULES)
+    sentences = re.split(r"(?<=[.!?])\s+", cleaned)
 
-    return sentences
+    return [s.strip() for s in sentences if len(s.strip()) > 10]
 
 # ======================================================
-# UI INPUT & DISPLAY
+# UI
 # ======================================================
 question = st.text_input("Enter your question")
 
@@ -164,5 +141,6 @@ if question:
         )
     else:
         st.success("Here is the policy information:")
-        for sentence in sentences:
-            st.markdown(sentence)
+        for s in sentences:
+            st.markdown(s)
+
