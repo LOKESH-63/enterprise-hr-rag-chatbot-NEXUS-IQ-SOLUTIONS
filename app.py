@@ -6,7 +6,7 @@ from langchain_community.document_loaders import PyPDFLoader
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="HR Policy Assistant", page_icon="🏢")
-st.title("🏢 ABC Technologies Pvt. Ltd.")
+st.title("🏢 NEXUS IQ SOLUTIONS")
 st.caption(
     "HR Policy Assistant — retrieves exact policy sections from the official HR document"
 )
